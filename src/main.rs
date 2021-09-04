@@ -14,7 +14,8 @@ struct HelloTriangleApplication {
     width : u32,
     height : u32,
     vk_entry : ash::Entry,
-    instance : Option<Instance>
+    instance : Option<Instance>,
+    physical_device : Option<vk::PhysicalDevice>
 }
 
 impl HelloTriangleApplication {
@@ -32,7 +33,8 @@ impl HelloTriangleApplication {
             width : 800,
             height : 600,
             vk_entry : unsafe{ash::Entry::new().unwrap()},
-            instance : None
+            instance : None,
+            physical_device : None,
         }
     }
 
@@ -46,6 +48,7 @@ impl HelloTriangleApplication {
 
     fn init_vulkan(&mut self){
         self.create_instance();
+        self.pick_physical_device();
     }
 
     fn create_instance(&mut self){
@@ -77,6 +80,38 @@ impl HelloTriangleApplication {
         };
 
         self.instance = Option::Some(unsafe{self.vk_entry.create_instance(&create_info, None).unwrap()});
+    }
+
+    fn pick_physical_device(&mut self){
+        let instance_ref = self.instance.as_ref().unwrap();
+        let devices = unsafe{instance_ref.enumerate_physical_devices().unwrap()};
+        for device in devices {
+            if self.is_device_suitable(&device){
+                self.physical_device = Option::Some(device);
+                break;
+            }
+        }
+
+        if let None = self.physical_device {
+            panic!("failed to find GPUs with Vulkan support!");
+        }
+    }
+
+    fn is_device_suitable(&self, device : &vk::PhysicalDevice) -> bool{
+        let queue_family_index = self.find_queue_families(device);
+        return queue_family_index.is_some();
+    }
+
+    fn find_queue_families(&self, device : &vk::PhysicalDevice) -> Option<usize> {
+        let instance_ref = self.instance.as_ref().unwrap();
+        let queue_families = unsafe{instance_ref.get_physical_device_queue_family_properties(*device)};
+        for (i, queue_family) in queue_families.into_iter().enumerate(){
+            if queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS){
+                return Option::Some(i);
+            }
+        }
+
+        None
     }
 
     fn main_loop(&mut self){
