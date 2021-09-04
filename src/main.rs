@@ -15,7 +15,9 @@ struct HelloTriangleApplication {
     height : u32,
     vk_entry : ash::Entry,
     instance : Option<Instance>,
-    physical_device : Option<vk::PhysicalDevice>
+    physical_device : Option<vk::PhysicalDevice>,
+    device : Option<ash::Device>,
+    graphics_queue : Option<vk::Queue>
 }
 
 impl HelloTriangleApplication {
@@ -35,6 +37,8 @@ impl HelloTriangleApplication {
             vk_entry : unsafe{ash::Entry::new().unwrap()},
             instance : None,
             physical_device : None,
+            device : None,
+            graphics_queue : None
         }
     }
 
@@ -49,6 +53,7 @@ impl HelloTriangleApplication {
     fn init_vulkan(&mut self){
         self.create_instance();
         self.pick_physical_device();
+        self.create_logical_device();
     }
 
     fn create_instance(&mut self){
@@ -112,6 +117,48 @@ impl HelloTriangleApplication {
         }
 
         None
+    }
+
+    fn create_logical_device(&mut self){
+        let instance_ref = self.instance.as_ref().unwrap();
+        let physical_device_ref = self.physical_device.as_ref().unwrap();
+        let indices = self.find_queue_families(physical_device_ref);
+
+        let queue_priority : f32 = 1.0;
+
+        let queue_create_info = vk::DeviceQueueCreateInfo {
+            s_type : vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            queue_family_index : indices.clone().unwrap() as u32,
+            queue_count : 1,
+            p_queue_priorities : &queue_priority,
+            flags : vk::DeviceQueueCreateFlags::empty()
+        };
+
+        let device_features = vk::PhysicalDeviceFeatures::default();
+
+        let create_info = vk::DeviceCreateInfo {
+            s_type : vk::StructureType::DEVICE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            flags : vk::DeviceCreateFlags::empty(),
+            p_queue_create_infos : &queue_create_info,
+            queue_create_info_count : 1,
+            p_enabled_features : &device_features,
+            enabled_extension_count : 0,
+            pp_enabled_extension_names : std::ptr::null(),
+            enabled_layer_count : 0,
+            pp_enabled_layer_names : std::ptr::null()
+        };
+
+        self.device = Option::Some(
+            unsafe{
+                instance_ref.create_device(*physical_device_ref, &create_info, None).unwrap()
+            }
+        );
+
+        self.graphics_queue = Option::Some(unsafe{
+            self.device.as_ref().unwrap().get_device_queue(indices.unwrap() as u32, 0)
+        });
     }
 
     fn main_loop(&mut self){
