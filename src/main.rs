@@ -1,11 +1,13 @@
 extern crate glfw;
 extern crate ash;
+extern crate winapi;
 
 use std::sync::mpsc::Receiver;
 use std::ffi::CString;
 use std::os::raw::c_char;
 use glfw::Glfw;
 use ash::{Instance, vk};
+use winapi::um::libloaderapi::GetModuleHandleW;
 
 struct HelloTriangleApplication {
     glfw : Glfw,
@@ -17,7 +19,8 @@ struct HelloTriangleApplication {
     instance : Option<Instance>,
     physical_device : Option<vk::PhysicalDevice>,
     device : Option<ash::Device>,
-    graphics_queue : Option<vk::Queue>
+    graphics_queue : Option<vk::Queue>,
+    surface : Option<vk::SurfaceKHR>
 }
 
 impl HelloTriangleApplication {
@@ -38,7 +41,8 @@ impl HelloTriangleApplication {
             instance : None,
             physical_device : None,
             device : None,
-            graphics_queue : None
+            graphics_queue : None,
+            surface : None
         }
     }
 
@@ -52,6 +56,7 @@ impl HelloTriangleApplication {
 
     fn init_vulkan(&mut self){
         self.create_instance();
+        self.create_surface();
         self.pick_physical_device();
         self.create_logical_device();
     }
@@ -85,6 +90,24 @@ impl HelloTriangleApplication {
         };
 
         self.instance = Option::Some(unsafe{self.vk_entry.create_instance(&create_info, None).unwrap()});
+    }
+
+
+    fn create_surface(&mut self) {
+        let hinstance = unsafe{ GetModuleHandleW(std::ptr::null()) as *const std::ffi::c_void };
+        let hwnd = self.window.as_ref().unwrap().get_win32_window();
+        let create_info = vk::Win32SurfaceCreateInfoKHR{
+            s_type : vk::StructureType::WIN32_SURFACE_CREATE_INFO_KHR,
+            p_next : std::ptr::null(),
+            flags : Default::default(),
+            hinstance : hinstance,
+            hwnd : hwnd,
+        };
+
+        let win32_surface_loader = ash::extensions::khr::Win32Surface::new(&self.vk_entry, self.instance.as_ref().unwrap());
+        self.surface = Option::Some(
+            unsafe{ win32_surface_loader.create_win32_surface(&create_info, None).unwrap() }
+        );
     }
 
     fn pick_physical_device(&mut self){
@@ -160,6 +183,7 @@ impl HelloTriangleApplication {
             self.device.as_ref().unwrap().get_device_queue(indices.unwrap() as u32, 0)
         });
     }
+
 
     fn main_loop(&mut self){
         let window_ref = self.window.as_ref().unwrap();
