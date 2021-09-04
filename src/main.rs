@@ -1,11 +1,13 @@
 extern crate glfw;
 extern crate ash;
+extern crate winapi;
 
 use std::sync::mpsc::Receiver;
 use std::ffi::CString;
 use std::os::raw::c_char;
 use glfw::Glfw;
 use ash::{Instance, vk};
+use winapi::um::libloaderapi::GetModuleHandleW;
 
 struct HelloTriangleApplication {
     glfw : Glfw,
@@ -17,7 +19,9 @@ struct HelloTriangleApplication {
     instance : Option<Instance>,
     physical_device : Option<vk::PhysicalDevice>,
     device : Option<ash::Device>,
-    graphics_queue : Option<vk::Queue>
+    graphics_queue : Option<vk::Queue>,
+    surface : Option<vk::SurfaceKHR>,
+    present_queue : Option<vk::Queue>
 }
 
 impl HelloTriangleApplication {
@@ -38,7 +42,9 @@ impl HelloTriangleApplication {
             instance : None,
             physical_device : None,
             device : None,
-            graphics_queue : None
+            graphics_queue : None,
+            surface : None,
+            present_queue : None
         }
     }
 
@@ -52,6 +58,7 @@ impl HelloTriangleApplication {
 
     fn init_vulkan(&mut self){
         self.create_instance();
+        self.create_surface();
         self.pick_physical_device();
         self.create_logical_device();
     }
@@ -87,6 +94,24 @@ impl HelloTriangleApplication {
         self.instance = Option::Some(unsafe{self.vk_entry.create_instance(&create_info, None).unwrap()});
     }
 
+
+    fn create_surface(&mut self) {
+        let hinstance = unsafe{ GetModuleHandleW(std::ptr::null()) as *const std::ffi::c_void };
+        let hwnd = self.window.as_ref().unwrap().get_win32_window();
+        let create_info = vk::Win32SurfaceCreateInfoKHR{
+            s_type : vk::StructureType::WIN32_SURFACE_CREATE_INFO_KHR,
+            p_next : std::ptr::null(),
+            flags : Default::default(),
+            hinstance : hinstance,
+            hwnd : hwnd,
+        };
+
+        let surface_loader = ash::extensions::khr::Win32Surface::new(&self.vk_entry, self.instance.as_ref().unwrap());
+        self.surface = Option::Some(
+            unsafe{ surface_loader.create_win32_surface(&create_info, None).unwrap() }
+        );
+    }
+
     fn pick_physical_device(&mut self){
         let instance_ref = self.instance.as_ref().unwrap();
         let devices = unsafe{instance_ref.enumerate_physical_devices().unwrap()};
@@ -103,37 +128,52 @@ impl HelloTriangleApplication {
     }
 
     fn is_device_suitable(&self, device : &vk::PhysicalDevice) -> bool{
-        let queue_family_index = self.find_queue_families(device);
-        return queue_family_index.is_some();
+        let queue_family = self.find_queue_families(device);
+        return queue_family.0.is_some() && queue_family.1.is_some();
     }
 
-    fn find_queue_families(&self, device : &vk::PhysicalDevice) -> Option<usize> {
+    fn find_queue_families(&self, device : &vk::PhysicalDevice) -> (Option<usize>, Option<usize>) {
         let instance_ref = self.instance.as_ref().unwrap();
         let queue_families = unsafe{instance_ref.get_physical_device_queue_family_properties(*device)};
+        let surface_loader = ash::extensions::khr::Surface::new(&self.vk_entry, &self.instance.as_ref().unwrap());
+        let mut graphics_family : Option<usize> = None;
+        let mut present_family : Option<usize> = None;
         for (i, queue_family) in queue_families.into_iter().enumerate(){
             if queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS){
-                return Option::Some(i);
+                graphics_family = Option::Some(i);
+                
+            }
+
+            if let Ok(_) = unsafe{
+                surface_loader.get_physical_device_surface_support(*device, i as u32, *self.surface.as_ref().unwrap())
+            }{
+                present_family = Option::Some(i);
             }
         }
 
-        None
+        return(graphics_family, present_family)
     }
 
     fn create_logical_device(&mut self){
         let instance_ref = self.instance.as_ref().unwrap();
         let physical_device_ref = self.physical_device.as_ref().unwrap();
         let indices = self.find_queue_families(physical_device_ref);
+        let unique_queue_families = [indices.clone().0.unwrap(), indices.clone().1.unwrap()];
 
         let queue_priority : f32 = 1.0;
+        let mut queue_create_infos : Vec<vk::DeviceQueueCreateInfo> = Vec::new();
 
-        let queue_create_info = vk::DeviceQueueCreateInfo {
-            s_type : vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
-            p_next : std::ptr::null(),
-            queue_family_index : indices.clone().unwrap() as u32,
-            queue_count : 1,
-            p_queue_priorities : &queue_priority,
-            flags : vk::DeviceQueueCreateFlags::empty()
-        };
+        for queue_family in unique_queue_families{
+            let queue_create_info = vk::DeviceQueueCreateInfo {
+                s_type : vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+                p_next : std::ptr::null(),
+                queue_family_index : queue_family as u32,
+                queue_count : 1,
+                p_queue_priorities : &queue_priority,
+                flags : vk::DeviceQueueCreateFlags::empty()
+            };
+            queue_create_infos.push(queue_create_info);
+        }
 
         let device_features = vk::PhysicalDeviceFeatures::default();
 
@@ -141,8 +181,8 @@ impl HelloTriangleApplication {
             s_type : vk::StructureType::DEVICE_CREATE_INFO,
             p_next : std::ptr::null(),
             flags : vk::DeviceCreateFlags::empty(),
-            p_queue_create_infos : &queue_create_info,
-            queue_create_info_count : 1,
+            p_queue_create_infos : queue_create_infos.as_ptr(),
+            queue_create_info_count : queue_create_infos.len() as u32,
             p_enabled_features : &device_features,
             enabled_extension_count : 0,
             pp_enabled_extension_names : std::ptr::null(),
@@ -157,9 +197,13 @@ impl HelloTriangleApplication {
         );
 
         self.graphics_queue = Option::Some(unsafe{
-            self.device.as_ref().unwrap().get_device_queue(indices.unwrap() as u32, 0)
+            self.device.as_ref().unwrap().get_device_queue(indices.0.unwrap() as u32, 0)
+        });
+        self.present_queue = Option::Some(unsafe{
+            self.device.as_ref().unwrap().get_device_queue(indices.1.unwrap() as u32, 0)
         });
     }
+
 
     fn main_loop(&mut self){
         let window_ref = self.window.as_ref().unwrap();
