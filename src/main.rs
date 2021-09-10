@@ -42,7 +42,9 @@ struct HelloTriangleApplication {
     graphics_pipeline : Option<vk::Pipeline>,
     swap_chain_frame_buffers : Vec<vk::Framebuffer>,
     command_pool : Option<vk::CommandPool>,
-    command_buffers : Option<Vec<vk::CommandBuffer>>
+    command_buffers : Option<Vec<vk::CommandBuffer>>,
+    image_available_semaphore : Option<vk::Semaphore>,
+    render_finished_semaphore : Option<vk::Semaphore>
 }
 
 impl HelloTriangleApplication {
@@ -76,7 +78,9 @@ impl HelloTriangleApplication {
             graphics_pipeline : None,
             swap_chain_frame_buffers : Vec::new(),
             command_pool : None,
-            command_buffers : None
+            command_buffers : None,
+            image_available_semaphore : None,
+            render_finished_semaphore : None
         }
     }
 
@@ -100,6 +104,7 @@ impl HelloTriangleApplication {
         self.create_framebuffers();
         self.create_command_pool();
         self.create_command_buffers();
+        self.create_semaphore();
     }
 
     fn create_instance(&mut self){
@@ -468,6 +473,16 @@ impl HelloTriangleApplication {
             flags : vk::SubpassDescriptionFlags::empty()
         };
 
+        let dependency = vk::SubpassDependency {
+            src_subpass : vk::SUBPASS_EXTERNAL,
+            dst_subpass : 0,
+            src_stage_mask : vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            src_access_mask : vk::AccessFlags::empty(),
+            dst_stage_mask : vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            dst_access_mask : vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            dependency_flags : vk::DependencyFlags::empty()
+        };
+
         let render_pass_info = vk::RenderPassCreateInfo {
             s_type : vk::StructureType::RENDER_PASS_CREATE_INFO,
             p_next : std::ptr::null(),
@@ -476,9 +491,10 @@ impl HelloTriangleApplication {
             subpass_count : 1,
             p_subpasses : &subpass as *const vk::SubpassDescription,
             flags : vk::RenderPassCreateFlags::empty(),
-            dependency_count : 0,
-            p_dependencies : std::ptr::null()
+            dependency_count : 1,
+            p_dependencies : &dependency as *const vk::SubpassDependency
         };
+
         self.render_pass = Some(unsafe {
             self.device.as_ref().unwrap()
             .create_render_pass(&render_pass_info, None)
@@ -784,7 +800,84 @@ impl HelloTriangleApplication {
                 device_ref.end_command_buffer(*command_buffer).expect("failed to record command buffer");
             }
         }
+    }
 
+    fn create_semaphore(&mut self){
+        let semaphore_info = vk::SemaphoreCreateInfo {
+            s_type : vk::StructureType::SEMAPHORE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            flags : vk::SemaphoreCreateFlags::empty()
+        };
+
+        let device_ref = self.device.as_ref().unwrap();
+
+        self.image_available_semaphore = Some(unsafe {
+            device_ref.create_semaphore(&semaphore_info, None)
+            .expect("failed to create semaphores!")
+        });
+
+        self.render_finished_semaphore = Some(unsafe {
+            device_ref.create_semaphore(&semaphore_info, None)
+            .expect("failed to create semaphores!")
+        });
+    }
+
+    fn draw_frame(&self){
+        let swapchain = ash::extensions::khr::Swapchain::new(
+            self.instance.as_ref().unwrap(),
+            self.device.as_ref().unwrap()
+        );
+        
+        let draw_result = unsafe {
+            swapchain.acquire_next_image(
+                *self.swap_chain.as_ref().unwrap(), 
+                u64::MAX, 
+                *self.image_available_semaphore.as_ref().unwrap(), 
+                vk::Fence::null()
+            )
+            .expect("failed to load next image")
+        };
+
+        let image_index = draw_result.0;
+
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+
+        let submit_info = [vk::SubmitInfo {
+            s_type : vk::StructureType::SUBMIT_INFO,
+            p_next : std::ptr::null(),
+            wait_semaphore_count : 1,
+            p_wait_semaphores : self.image_available_semaphore.as_ref().unwrap() as *const vk::Semaphore,
+            p_wait_dst_stage_mask : wait_stages.as_ptr(),
+            command_buffer_count : 1,
+            p_command_buffers : &self.command_buffers.as_ref().unwrap()[image_index as usize] as *const vk::CommandBuffer,
+            signal_semaphore_count : 1,
+            p_signal_semaphores : self.render_finished_semaphore.as_ref().unwrap() as *const vk::Semaphore
+        }];
+
+        unsafe{
+            self.device.as_ref().unwrap()
+            .queue_submit(*self.graphics_queue.as_ref().unwrap(), &submit_info, vk::Fence::null())
+            .expect("failed to submit draw command buffer");
+        }
+
+        let mut result = vk::Result::NOT_READY;
+
+        let present_info = vk::PresentInfoKHR {
+            s_type : vk::StructureType::PRESENT_INFO_KHR,
+            p_next : std::ptr::null(),
+            wait_semaphore_count : 1,
+            p_wait_semaphores : self.render_finished_semaphore.as_ref().unwrap() as *const vk::Semaphore,
+            swapchain_count : 1,
+            p_swapchains : self.swap_chain.as_ref().unwrap() as *const vk::SwapchainKHR,
+            p_image_indices : &image_index as *const u32,
+            p_results : &mut result as *mut vk::Result
+        };
+
+        unsafe{
+            swapchain
+            .queue_present(*self.present_queue.as_ref().unwrap(), &present_info)
+            .expect("failed to present");
+        }
 
     }
 
@@ -792,6 +885,13 @@ impl HelloTriangleApplication {
         let window_ref = self.window.as_ref().unwrap();
         while !window_ref.should_close(){
             self.glfw.poll_events();
+            self.draw_frame();
+        }
+
+        unsafe{
+            self.device.as_ref().unwrap()
+            .device_wait_idle()
+            .expect("");
         }
     }
 }
