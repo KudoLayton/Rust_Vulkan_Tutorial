@@ -8,7 +8,7 @@ use std::ops::{Add, Deref};
 use std::{ops::Index, sync::mpsc::Receiver};
 use std::ffi::CString;
 use std::os::raw::c_char;
-use ash::vk::{PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PipelineLayout, PipelineMultisampleStateCreateInfo, PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateFlags, PipelineShaderStageCreateInfo, PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo};
+use ash::vk::{ClearColorValue, CommandBufferUsageFlags, PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PipelineLayout, PipelineMultisampleStateCreateInfo, PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateFlags, PipelineShaderStageCreateInfo, PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo};
 use glfw::Glfw;
 use ash::{Instance, vk};
 use winapi::um::libloaderapi::GetModuleHandleW;
@@ -40,7 +40,9 @@ struct HelloTriangleApplication {
     render_pass : Option<vk::RenderPass>,
     pipeline_layout : Option<vk::PipelineLayout>,
     graphics_pipeline : Option<vk::Pipeline>,
-    swaph_chain_frame_buffers : Vec<vk::Framebuffer>
+    swap_chain_frame_buffers : Vec<vk::Framebuffer>,
+    command_pool : Option<vk::CommandPool>,
+    command_buffers : Option<Vec<vk::CommandBuffer>>
 }
 
 impl HelloTriangleApplication {
@@ -72,7 +74,9 @@ impl HelloTriangleApplication {
             render_pass : None,
             pipeline_layout : None,
             graphics_pipeline : None,
-            swaph_chain_frame_buffers : Vec::new()
+            swap_chain_frame_buffers : Vec::new(),
+            command_pool : None,
+            command_buffers : None
         }
     }
 
@@ -94,6 +98,8 @@ impl HelloTriangleApplication {
         self.create_render_pass();
         self.create_graphics_pipeline();
         self.create_framebuffers();
+        self.create_command_pool();
+        self.create_command_buffers();
     }
 
     fn create_instance(&mut self){
@@ -675,7 +681,7 @@ impl HelloTriangleApplication {
     }
 
     fn create_framebuffers(&mut self){
-        self.swaph_chain_frame_buffers
+        self.swap_chain_frame_buffers
         .resize(
             self.swap_chain_image_views.len(), 
             vk::Framebuffer::null()
@@ -694,12 +700,92 @@ impl HelloTriangleApplication {
                 flags : vk::FramebufferCreateFlags::empty()
             };
 
-            self.swaph_chain_frame_buffers[idx] = unsafe {
+            self.swap_chain_frame_buffers[idx] = unsafe {
                 self.device.as_ref().unwrap()
                 .create_framebuffer(&framebuffer_info, None)
                 .expect("failed to create framebuffer!")
             };
         }
+    }
+
+    fn create_command_pool(&mut self){
+        let queue_family_indices = self.find_queue_families(self.physical_device.as_ref().unwrap());
+
+        let pool_info = vk::CommandPoolCreateInfo {
+            s_type : vk::StructureType::COMMAND_POOL_CREATE_INFO,
+            p_next : std::ptr::null(),
+            queue_family_index : queue_family_indices.0.unwrap() as u32,
+            flags : vk::CommandPoolCreateFlags::empty()
+        };
+
+        self.command_pool = Some(unsafe {
+            self.device.as_ref().unwrap()
+            .create_command_pool(&pool_info, None)
+            .expect("failed to create command pool!")
+        });
+    }
+
+    fn create_command_buffers(&mut self){
+        //self.command_buffers.resize(self.swap_chain_frame_buffers.len(), vk::CommandBuffer::null());
+
+        let alloc_info = vk::CommandBufferAllocateInfo {
+            s_type : vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next : std::ptr::null(),
+            command_pool : *self.command_pool.as_ref().unwrap(),
+            level : vk::CommandBufferLevel::PRIMARY,
+            command_buffer_count : self.swap_chain_frame_buffers.len() as u32,
+        };
+        
+        self.command_buffers = Some(unsafe {
+            self.device.as_ref().unwrap()
+            .allocate_command_buffers(&alloc_info)
+            .expect("failed to allocate command buffers!")
+        });
+
+        let device_ref = self.device.as_ref().unwrap();
+
+        for (idx, command_buffer) in self.command_buffers.as_ref().unwrap().iter().enumerate() {
+            let begin_info = vk::CommandBufferBeginInfo {
+                s_type : vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+                p_next : std::ptr::null(),
+                flags : CommandBufferUsageFlags::empty(),
+                p_inheritance_info : std::ptr::null()
+            };
+
+            unsafe{
+                device_ref.begin_command_buffer(*command_buffer, &begin_info)
+                .expect("failed to begin recording command buffer");
+            }
+
+            let render_area = vk::Rect2D {
+                offset : vk::Offset2D { x: 0, y: 0 },
+                extent : *self.swap_chain_extent.as_ref().unwrap()
+            };
+
+            let clear_color = vk::ClearValue {
+                color : ClearColorValue{ float32: [0.0f32, 0.0f32, 0.0f32, 1.0f32] },
+            };
+            
+            let render_pass_info = vk::RenderPassBeginInfo {
+                s_type : vk::StructureType::RENDER_PASS_BEGIN_INFO,
+                p_next : std::ptr::null(),
+                render_pass : *self.render_pass.as_ref().unwrap(),
+                framebuffer : self.swap_chain_frame_buffers[idx],
+                render_area : render_area,
+                clear_value_count : 1,
+                p_clear_values : &clear_color as *const vk::ClearValue
+            };
+
+            unsafe{
+                device_ref.cmd_begin_render_pass(*command_buffer, &render_pass_info, vk::SubpassContents::INLINE);
+                device_ref.cmd_bind_pipeline(*command_buffer, vk::PipelineBindPoint::GRAPHICS, *self.graphics_pipeline.as_ref().unwrap());
+                device_ref.cmd_draw(*command_buffer, 3, 1, 0, 0);
+                device_ref.cmd_end_render_pass(*command_buffer);
+                device_ref.end_command_buffer(*command_buffer).expect("failed to record command buffer");
+            }
+        }
+
+
     }
 
     fn main_loop(&mut self){
