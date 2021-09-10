@@ -8,7 +8,7 @@ use std::ops::{Add, Deref};
 use std::{ops::Index, sync::mpsc::Receiver};
 use std::ffi::CString;
 use std::os::raw::c_char;
-use ash::vk::{PipelineColorBlendAttachmentState, PipelineShaderStageCreateFlags};
+use ash::vk::{PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PipelineLayout, PipelineMultisampleStateCreateInfo, PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateFlags, PipelineShaderStageCreateInfo, PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo};
 use glfw::Glfw;
 use ash::{Instance, vk};
 use winapi::um::libloaderapi::GetModuleHandleW;
@@ -37,7 +37,9 @@ struct HelloTriangleApplication {
     swap_chain_image_format : Option<vk::Format>,
     swap_chain_extent : Option<vk::Extent2D>,
     swap_chain_image_views : Vec<vk::ImageView>,
-    pipeline_layout : Option<vk::PipelineLayout>
+    render_pass : Option<vk::RenderPass>,
+    pipeline_layout : Option<vk::PipelineLayout>,
+    graphics_pipeline : Option<vk::Pipeline>
 }
 
 impl HelloTriangleApplication {
@@ -66,7 +68,9 @@ impl HelloTriangleApplication {
             swap_chain_image_format : None,
             swap_chain_extent : None,
             swap_chain_image_views : Vec::new(),
-            pipeline_layout : None
+            render_pass : None,
+            pipeline_layout : None,
+            graphics_pipeline : None
         }
     }
 
@@ -85,6 +89,7 @@ impl HelloTriangleApplication {
         self.create_logical_device();
         self.create_swap_chain();
         self.create_image_views();
+        self.create_render_pass();
         self.create_graphics_pipeline();
     }
 
@@ -423,6 +428,55 @@ impl HelloTriangleApplication {
         }
     }
 
+    fn create_render_pass (&mut self){
+        let color_attachment = vk::AttachmentDescription {
+            format : *self.swap_chain_image_format.as_ref().unwrap(),
+            samples : vk::SampleCountFlags::TYPE_1,
+            load_op : vk::AttachmentLoadOp::CLEAR,
+            store_op : vk::AttachmentStoreOp::STORE,
+            stencil_load_op : vk::AttachmentLoadOp::DONT_CARE,
+            stencil_store_op : vk::AttachmentStoreOp::DONT_CARE,
+            initial_layout : vk::ImageLayout::UNDEFINED,
+            final_layout : vk::ImageLayout::PRESENT_SRC_KHR,
+            flags : vk::AttachmentDescriptionFlags::empty()
+        };
+
+        let color_attachment_ref = vk::AttachmentReference {
+            attachment : 0,
+            layout : vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+        };
+
+        let subpass = vk::SubpassDescription {
+            pipeline_bind_point : vk::PipelineBindPoint::GRAPHICS,
+            color_attachment_count : 1,
+            p_color_attachments : &color_attachment_ref as *const vk::AttachmentReference,
+            input_attachment_count : 0,
+            p_input_attachments : std::ptr::null(),
+            p_resolve_attachments : std::ptr::null(),
+            p_depth_stencil_attachment : std::ptr::null(),
+            preserve_attachment_count : 0,
+            p_preserve_attachments : std::ptr::null(),
+            flags : vk::SubpassDescriptionFlags::empty()
+        };
+
+        let render_pass_info = vk::RenderPassCreateInfo {
+            s_type : vk::StructureType::RENDER_PASS_CREATE_INFO,
+            p_next : std::ptr::null(),
+            attachment_count : 1,
+            p_attachments : &color_attachment as *const vk::AttachmentDescription,
+            subpass_count : 1,
+            p_subpasses : &subpass as *const vk::SubpassDescription,
+            flags : vk::RenderPassCreateFlags::empty(),
+            dependency_count : 0,
+            p_dependencies : std::ptr::null()
+        };
+        self.render_pass = Some(unsafe {
+            self.device.as_ref().unwrap()
+            .create_render_pass(&render_pass_info, None)
+            .expect("failed to create render pass")
+        });
+    }
+
     fn create_shader_module(&self, code : Vec<u8>) -> vk::ShaderModule{
         let create_info = vk::ShaderModuleCreateInfo {
             s_type : vk::StructureType::SHADER_MODULE_CREATE_INFO,
@@ -586,6 +640,34 @@ impl HelloTriangleApplication {
             self.device.as_ref().unwrap()
             .create_pipeline_layout(&pipeline_layout_info, None)
             .expect("failed to create pipeline layout")
+        });
+
+        let pipeline_info = [vk::GraphicsPipelineCreateInfo {
+            s_type : vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            stage_count : 2,
+            p_stages : &shader_stages as *const PipelineShaderStageCreateInfo,
+            p_vertex_input_state : &vertex_input_info as *const PipelineVertexInputStateCreateInfo,
+            p_input_assembly_state : &input_assembly as *const PipelineInputAssemblyStateCreateInfo,
+            p_viewport_state : &viewport_state as *const PipelineViewportStateCreateInfo,
+            p_rasterization_state : &rasterizer as *const PipelineRasterizationStateCreateInfo,
+            p_multisample_state : &multisampling as *const PipelineMultisampleStateCreateInfo,
+            p_depth_stencil_state : std::ptr::null(),
+            p_color_blend_state : &color_blending as *const PipelineColorBlendStateCreateInfo,
+            p_dynamic_state : std::ptr::null(),
+            layout : *self.pipeline_layout.as_ref().unwrap(),
+            render_pass : *self.render_pass.as_ref().unwrap(),
+            subpass : 0,
+            base_pipeline_handle : vk::Pipeline::null(),
+            base_pipeline_index : -1,
+            flags : vk::PipelineCreateFlags::empty(),
+            p_tessellation_state : std::ptr::null()
+        }];
+
+        self.graphics_pipeline = Some(unsafe {
+            self.device.as_ref().unwrap()
+            .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_info, None)
+            .expect("failed to create graphics pipeline!")[0]
         });
     }
 
