@@ -39,7 +39,8 @@ struct HelloTriangleApplication {
     swap_chain_image_views : Vec<vk::ImageView>,
     render_pass : Option<vk::RenderPass>,
     pipeline_layout : Option<vk::PipelineLayout>,
-    graphics_pipeline : Option<vk::Pipeline>
+    graphics_pipeline : Option<vk::Pipeline>,
+    swaph_chain_frame_buffers : Vec<vk::Framebuffer>
 }
 
 impl HelloTriangleApplication {
@@ -70,7 +71,8 @@ impl HelloTriangleApplication {
             swap_chain_image_views : Vec::new(),
             render_pass : None,
             pipeline_layout : None,
-            graphics_pipeline : None
+            graphics_pipeline : None,
+            swaph_chain_frame_buffers : Vec::new()
         }
     }
 
@@ -91,6 +93,7 @@ impl HelloTriangleApplication {
         self.create_image_views();
         self.create_render_pass();
         self.create_graphics_pipeline();
+        self.create_framebuffers();
     }
 
     fn create_instance(&mut self){
@@ -669,6 +672,34 @@ impl HelloTriangleApplication {
             .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_info, None)
             .expect("failed to create graphics pipeline!")[0]
         });
+    }
+
+    fn create_framebuffers(&mut self){
+        self.swaph_chain_frame_buffers
+        .resize(
+            self.swap_chain_image_views.len(), 
+            vk::Framebuffer::null()
+        );
+
+        for (idx, image_view) in self.swap_chain_image_views.iter().enumerate(){
+            let framebuffer_info = vk::FramebufferCreateInfo{
+                s_type : vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+                p_next : std::ptr::null(),
+                render_pass : *self.render_pass.as_ref().unwrap(),
+                attachment_count : 1,
+                p_attachments : image_view as *const vk::ImageView,
+                width : self.swap_chain_extent.as_ref().unwrap().width,
+                height : self.swap_chain_extent.as_ref().unwrap().height,
+                layers : 1,
+                flags : vk::FramebufferCreateFlags::empty()
+            };
+
+            self.swaph_chain_frame_buffers[idx] = unsafe {
+                self.device.as_ref().unwrap()
+                .create_framebuffer(&framebuffer_info, None)
+                .expect("failed to create framebuffer!")
+            };
+        }
     }
 
     fn main_loop(&mut self){
