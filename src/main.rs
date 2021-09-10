@@ -33,7 +33,8 @@ struct HelloTriangleApplication {
     swap_chain : Option<vk::SwapchainKHR>,
     swap_chain_images : Option<Vec<vk::Image>>,
     swap_chain_image_format : Option<vk::Format>,
-    swap_chain_extent : Option<vk::Extent2D>
+    swap_chain_extent : Option<vk::Extent2D>,
+    swap_chain_image_views : Vec<vk::ImageView>
 }
 
 impl HelloTriangleApplication {
@@ -60,7 +61,8 @@ impl HelloTriangleApplication {
             swap_chain : None,
             swap_chain_images : None,
             swap_chain_image_format : None,
-            swap_chain_extent : None
+            swap_chain_extent : None,
+            swap_chain_image_views : Vec::new()
         }
     }
 
@@ -78,6 +80,7 @@ impl HelloTriangleApplication {
         self.pick_physical_device();
         self.create_logical_device();
         self.create_swap_chain();
+        self.create_image_views();
     }
 
     fn create_instance(&mut self){
@@ -374,6 +377,45 @@ impl HelloTriangleApplication {
         self.swap_chain_image_format = Some(surface_format.format);
 
         self.swap_chain_extent = Some(extent);
+    }
+
+    fn create_image_views(&mut self){
+        self.swap_chain_image_views.resize(self.swap_chain_images.as_ref().unwrap().len(), vk::ImageView::null());
+        let images_len = self.swap_chain_image_views.len();
+
+        
+        for idx in 0 .. images_len {
+            let component_mapping = vk::ComponentMapping {
+                r : vk::ComponentSwizzle::IDENTITY,
+                g : vk::ComponentSwizzle::IDENTITY,
+                b : vk::ComponentSwizzle::IDENTITY,
+                a : vk::ComponentSwizzle::IDENTITY,
+            };
+
+            let subresource_range = vk::ImageSubresourceRange {
+                aspect_mask : vk::ImageAspectFlags::COLOR,
+                base_mip_level : 0,
+                level_count : 1,
+                base_array_layer : 0,
+                layer_count : 1
+            };
+
+            let create_info = vk::ImageViewCreateInfo{
+                s_type : vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+                p_next : std::ptr::null(),
+                image : self.swap_chain_images.as_ref().unwrap()[idx],
+                view_type : vk::ImageViewType::TYPE_2D,
+                format : *self.swap_chain_image_format.as_ref().unwrap(),
+                components : component_mapping,
+                subresource_range : subresource_range,
+                flags : vk::ImageViewCreateFlags::empty(),
+            };
+
+            self.swap_chain_image_views[idx] = unsafe{
+                self.device.as_ref().unwrap().create_image_view(&create_info, None)
+                .expect("failed to create image views!")
+            };
+        }
     }
 
     fn main_loop(&mut self){
