@@ -4,11 +4,11 @@ extern crate winapi;
 
 use std::io::Read;
 use std::mem::swap;
-use std::ops::Deref;
+use std::ops::{Add, Deref};
 use std::{ops::Index, sync::mpsc::Receiver};
 use std::ffi::CString;
 use std::os::raw::c_char;
-use ash::vk::PipelineShaderStageCreateFlags;
+use ash::vk::{PipelineColorBlendAttachmentState, PipelineShaderStageCreateFlags};
 use glfw::Glfw;
 use ash::{Instance, vk};
 use winapi::um::libloaderapi::GetModuleHandleW;
@@ -36,7 +36,8 @@ struct HelloTriangleApplication {
     swap_chain_images : Option<Vec<vk::Image>>,
     swap_chain_image_format : Option<vk::Format>,
     swap_chain_extent : Option<vk::Extent2D>,
-    swap_chain_image_views : Vec<vk::ImageView>
+    swap_chain_image_views : Vec<vk::ImageView>,
+    pipeline_layout : Option<vk::PipelineLayout>
 }
 
 impl HelloTriangleApplication {
@@ -64,7 +65,8 @@ impl HelloTriangleApplication {
             swap_chain_images : None,
             swap_chain_image_format : None,
             swap_chain_extent : None,
-            swap_chain_image_views : Vec::new()
+            swap_chain_image_views : Vec::new(),
+            pipeline_layout : None
         }
     }
 
@@ -462,6 +464,129 @@ impl HelloTriangleApplication {
         };
 
         let shader_stages = [vert_shader_stage_info, frag_shader_stage_info];
+
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo {
+            s_type : vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            vertex_binding_description_count : 0,
+            p_vertex_binding_descriptions : std::ptr::null(),
+            vertex_attribute_description_count : 0,
+            p_vertex_attribute_descriptions : std::ptr::null(),
+            flags : vk::PipelineVertexInputStateCreateFlags::empty()
+        };
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo{
+            s_type : vk::StructureType::PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            topology : vk::PrimitiveTopology::TRIANGLE_LIST,
+            primitive_restart_enable : 0,
+            flags : vk::PipelineInputAssemblyStateCreateFlags::empty()
+        };
+
+        let viewport = vk::Viewport{
+            x : 0.0,
+            y : 0.0,
+            width : self.swap_chain_extent.as_ref().unwrap().width as f32,
+            height : self.swap_chain_extent.as_ref().unwrap().height as f32,
+            min_depth : 0.0,
+            max_depth : 1.0
+        };
+
+        let scissor = vk::Rect2D {
+            offset : vk::Offset2D { x: 0, y: 0 },
+            extent : *self.swap_chain_extent.as_ref().unwrap()
+        };
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo {
+            s_type : vk::StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            viewport_count : 1,
+            p_viewports : &viewport as *const vk::Viewport,
+            scissor_count : 1,
+            p_scissors : &scissor as *const vk::Rect2D,
+            flags : vk::PipelineViewportStateCreateFlags::empty()
+        };
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo {
+            s_type : vk::StructureType::PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            depth_clamp_enable : 0,
+            rasterizer_discard_enable : 0,
+            polygon_mode : vk::PolygonMode::FILL,
+            line_width : 1.0,
+            cull_mode : vk::CullModeFlags::BACK,
+            front_face : vk::FrontFace::CLOCKWISE,
+            depth_bias_enable : 0,
+            depth_bias_constant_factor : 0.0,
+            depth_bias_clamp : 0.0,
+            depth_bias_slope_factor : 0.0,
+            flags : vk::PipelineRasterizationStateCreateFlags::empty()
+        };
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo {
+            s_type : vk::StructureType::PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            sample_shading_enable : 0,
+            rasterization_samples : vk::SampleCountFlags::TYPE_1,
+            min_sample_shading : 1.0,
+            p_sample_mask : std::ptr::null(),
+            alpha_to_coverage_enable : 0,
+            alpha_to_one_enable : 0,
+            flags : vk::PipelineMultisampleStateCreateFlags::empty()
+        };
+
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
+            color_write_mask : vk::ColorComponentFlags::all(),
+            blend_enable : 0,
+            src_color_blend_factor : vk::BlendFactor::ONE,
+            dst_color_blend_factor : vk::BlendFactor::ZERO,
+            color_blend_op : vk::BlendOp::ADD,
+            src_alpha_blend_factor : vk::BlendFactor::ONE,
+            dst_alpha_blend_factor : vk::BlendFactor::ZERO,
+            alpha_blend_op : vk::BlendOp::ADD
+        };
+
+        let blend_constants = [0.0, 0.0, 0.0, 0.0];
+
+        let color_blending = vk::PipelineColorBlendStateCreateInfo {
+            s_type : vk::StructureType::PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            logic_op_enable : 0,
+            logic_op : vk::LogicOp::COPY,
+            attachment_count : 1,
+            p_attachments : &color_blend_attachment as *const PipelineColorBlendAttachmentState,
+            blend_constants : blend_constants,
+            flags : vk::PipelineColorBlendStateCreateFlags::empty()
+        };
+
+        let dynamic_states = [
+            vk::DynamicState::VIEWPORT,
+            vk::DynamicState::LINE_WIDTH
+        ];
+
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo {
+            s_type : vk::StructureType::PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            dynamic_state_count : 2,
+            p_dynamic_states : dynamic_states.as_ptr(),
+            flags : vk::PipelineDynamicStateCreateFlags::empty()
+        };
+
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+            s_type : vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
+            p_next : std::ptr::null(),
+            set_layout_count : 0,
+            p_set_layouts : std::ptr::null(),
+            push_constant_range_count : 0,
+            p_push_constant_ranges : std::ptr::null(),
+            flags : vk::PipelineLayoutCreateFlags::empty()
+        };
+
+        self.pipeline_layout = Some(unsafe{
+            self.device.as_ref().unwrap()
+            .create_pipeline_layout(&pipeline_layout_info, None)
+            .expect("failed to create pipeline layout")
+        });
     }
 
     fn main_loop(&mut self){
