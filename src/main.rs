@@ -2,11 +2,13 @@ extern crate glfw;
 extern crate ash;
 extern crate winapi;
 
+use std::io::Read;
 use std::mem::swap;
 use std::ops::Deref;
 use std::{ops::Index, sync::mpsc::Receiver};
 use std::ffi::CString;
 use std::os::raw::c_char;
+use ash::vk::PipelineShaderStageCreateFlags;
 use glfw::Glfw;
 use ash::{Instance, vk};
 use winapi::um::libloaderapi::GetModuleHandleW;
@@ -81,6 +83,7 @@ impl HelloTriangleApplication {
         self.create_logical_device();
         self.create_swap_chain();
         self.create_image_views();
+        self.create_graphics_pipeline();
     }
 
     fn create_instance(&mut self){
@@ -418,12 +421,63 @@ impl HelloTriangleApplication {
         }
     }
 
+    fn create_shader_module(&self, code : Vec<u8>) -> vk::ShaderModule{
+        let create_info = vk::ShaderModuleCreateInfo {
+            s_type : vk::StructureType::SHADER_MODULE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            code_size : code.len(),
+            p_code : code.as_ptr() as *const u32,
+            flags : vk::ShaderModuleCreateFlags::empty()
+        };
+
+        return unsafe{self.device.as_ref().unwrap().create_shader_module(&create_info, None).expect("failed to create shader module!")};
+    }
+
+    fn create_graphics_pipeline(&mut self){
+        let vert_shader_code = read_file(std::path::Path::new("shaders/vert.spv"));
+        let frag_shader_code = read_file(std::path::Path::new("shaders/frag.spv"));
+
+        let vert_shader_module = self.create_shader_module(vert_shader_code);
+        let frag_shader_module = self.create_shader_module(frag_shader_code);
+        let name = std::ffi::CString::new("main").unwrap();
+
+        let vert_shader_stage_info = vk::PipelineShaderStageCreateInfo {
+            s_type : vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            stage : vk::ShaderStageFlags::VERTEX,
+            module : vert_shader_module,
+            p_name : name.as_ptr() as *const i8,
+            flags : PipelineShaderStageCreateFlags::empty(),
+            p_specialization_info : std::ptr::null()
+        };
+
+        let frag_shader_stage_info = vk::PipelineShaderStageCreateInfo {
+            s_type : vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            stage : vk::ShaderStageFlags::FRAGMENT,
+            module : frag_shader_module,
+            p_name : name.as_ptr() as *const i8,
+            flags : PipelineShaderStageCreateFlags::empty(),
+            p_specialization_info : std::ptr::null()
+        };
+
+        let shader_stages = [vert_shader_stage_info, frag_shader_stage_info];
+    }
+
     fn main_loop(&mut self){
         let window_ref = self.window.as_ref().unwrap();
         while !window_ref.should_close(){
             self.glfw.poll_events();
         }
     }
+}
+
+fn read_file(file_name : &std::path::Path) -> Vec<u8>{
+    let mut file = std::fs::File::open(file_name).expect("failed to open file");
+    let mut buffer = Vec::<u8>::new();
+    file.read_to_end(&mut buffer).expect("failed to open file");
+    return buffer;
+
 }
 
 fn main() {
