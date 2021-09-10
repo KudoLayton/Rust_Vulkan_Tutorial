@@ -43,8 +43,11 @@ struct HelloTriangleApplication {
     swap_chain_frame_buffers : Vec<vk::Framebuffer>,
     command_pool : Option<vk::CommandPool>,
     command_buffers : Option<Vec<vk::CommandBuffer>>,
-    image_available_semaphore : Option<vk::Semaphore>,
-    render_finished_semaphore : Option<vk::Semaphore>
+    image_available_semaphores : Vec<vk::Semaphore>,
+    render_finished_semaphores : Vec<vk::Semaphore>,
+    in_flight_fences : Vec<vk::Fence>,
+    images_in_flight : Vec<vk::Fence>,
+    current_frame : usize
 }
 
 impl HelloTriangleApplication {
@@ -79,8 +82,11 @@ impl HelloTriangleApplication {
             swap_chain_frame_buffers : Vec::new(),
             command_pool : None,
             command_buffers : None,
-            image_available_semaphore : None,
-            render_finished_semaphore : None
+            image_available_semaphores : Vec::new(),
+            render_finished_semaphores : Vec::new(),
+            in_flight_fences : Vec::new(),
+            images_in_flight : Vec::new(),
+            current_frame : 0
         }
     }
 
@@ -104,7 +110,7 @@ impl HelloTriangleApplication {
         self.create_framebuffers();
         self.create_command_pool();
         self.create_command_buffers();
-        self.create_semaphore();
+        self.create_sync_objects();
     }
 
     fn create_instance(&mut self){
@@ -802,27 +808,54 @@ impl HelloTriangleApplication {
         }
     }
 
-    fn create_semaphore(&mut self){
+    fn create_sync_objects(&mut self){
+        self.image_available_semaphores.resize(2, vk::Semaphore::null());
+        self.render_finished_semaphores.resize(2, vk::Semaphore::null());
+        self.in_flight_fences.resize(2, vk::Fence::null());
+        self.images_in_flight.resize(self.swap_chain_images.as_ref().unwrap().len(), vk::Fence::null());
+
         let semaphore_info = vk::SemaphoreCreateInfo {
             s_type : vk::StructureType::SEMAPHORE_CREATE_INFO,
             p_next : std::ptr::null(),
             flags : vk::SemaphoreCreateFlags::empty()
         };
 
+        let fence_info = vk::FenceCreateInfo {
+            s_type : vk::StructureType::FENCE_CREATE_INFO,
+            p_next : std::ptr::null(),
+            flags : vk::FenceCreateFlags::SIGNALED
+        };
+
         let device_ref = self.device.as_ref().unwrap();
 
-        self.image_available_semaphore = Some(unsafe {
-            device_ref.create_semaphore(&semaphore_info, None)
-            .expect("failed to create semaphores!")
-        });
+        for idx in 0..2{
+            self.image_available_semaphores[idx] = unsafe {
+                device_ref.create_semaphore(&semaphore_info, None)
+                .expect("failed to create synchronization objects for a frame!")
+            };
 
-        self.render_finished_semaphore = Some(unsafe {
-            device_ref.create_semaphore(&semaphore_info, None)
-            .expect("failed to create semaphores!")
-        });
+            self.render_finished_semaphores[idx] = unsafe {
+                device_ref.create_semaphore(&semaphore_info, None)
+                .expect("failed to create synchronization objects for a frame!")
+            };
+
+            self.in_flight_fences[idx] = unsafe {
+                device_ref.create_fence(&fence_info, None)
+                .expect("failed to create synchronization objects for a frame!")
+            }
+        }
     }
 
-    fn draw_frame(&self){
+    fn draw_frame(&mut self){
+        let fences = [*&self.in_flight_fences[self.current_frame]];
+        unsafe{
+            self.device.as_ref().unwrap().wait_for_fences(
+                &fences, 
+                true, u64::MAX
+            );
+
+            self.device.as_ref().unwrap().reset_fences(&fences);
+        }
         let swapchain = ash::extensions::khr::Swapchain::new(
             self.instance.as_ref().unwrap(),
             self.device.as_ref().unwrap()
@@ -832,7 +865,7 @@ impl HelloTriangleApplication {
             swapchain.acquire_next_image(
                 *self.swap_chain.as_ref().unwrap(), 
                 u64::MAX, 
-                *self.image_available_semaphore.as_ref().unwrap(), 
+                *&self.image_available_semaphores[self.current_frame], 
                 vk::Fence::null()
             )
             .expect("failed to load next image")
@@ -840,23 +873,36 @@ impl HelloTriangleApplication {
 
         let image_index = draw_result.0;
 
+        if self.images_in_flight[image_index as usize] != vk::Fence::null() {
+            unsafe{
+                self.device.as_ref().unwrap()
+                .wait_for_fences(&fences, true, u64::MAX)
+                .expect("fence not work");
+            }
+        }
+
+        self.images_in_flight[image_index as usize] = self.in_flight_fences[self.current_frame];
+
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
 
         let submit_info = [vk::SubmitInfo {
             s_type : vk::StructureType::SUBMIT_INFO,
             p_next : std::ptr::null(),
             wait_semaphore_count : 1,
-            p_wait_semaphores : self.image_available_semaphore.as_ref().unwrap() as *const vk::Semaphore,
+            p_wait_semaphores : &self.image_available_semaphores[self.current_frame] as *const vk::Semaphore,
             p_wait_dst_stage_mask : wait_stages.as_ptr(),
             command_buffer_count : 1,
             p_command_buffers : &self.command_buffers.as_ref().unwrap()[image_index as usize] as *const vk::CommandBuffer,
             signal_semaphore_count : 1,
-            p_signal_semaphores : self.render_finished_semaphore.as_ref().unwrap() as *const vk::Semaphore
+            p_signal_semaphores : &self.render_finished_semaphores[self.current_frame] as *const vk::Semaphore
         }];
 
         unsafe{
             self.device.as_ref().unwrap()
-            .queue_submit(*self.graphics_queue.as_ref().unwrap(), &submit_info, vk::Fence::null())
+            .reset_fences(&fences);
+            
+            self.device.as_ref().unwrap()
+            .queue_submit(*self.graphics_queue.as_ref().unwrap(), &submit_info, self.in_flight_fences[self.current_frame])
             .expect("failed to submit draw command buffer");
         }
 
@@ -866,7 +912,7 @@ impl HelloTriangleApplication {
             s_type : vk::StructureType::PRESENT_INFO_KHR,
             p_next : std::ptr::null(),
             wait_semaphore_count : 1,
-            p_wait_semaphores : self.render_finished_semaphore.as_ref().unwrap() as *const vk::Semaphore,
+            p_wait_semaphores : &self.render_finished_semaphores[self.current_frame] as *const vk::Semaphore,
             swapchain_count : 1,
             p_swapchains : self.swap_chain.as_ref().unwrap() as *const vk::SwapchainKHR,
             p_image_indices : &image_index as *const u32,
@@ -879,11 +925,12 @@ impl HelloTriangleApplication {
             .expect("failed to present");
         }
 
+        self.current_frame = (self.current_frame + 1) % 2;
+
     }
 
     fn main_loop(&mut self){
-        let window_ref = self.window.as_ref().unwrap();
-        while !window_ref.should_close(){
+        while !self.window.as_ref().unwrap().should_close(){
             self.glfw.poll_events();
             self.draw_frame();
         }
