@@ -874,9 +874,10 @@ impl HelloTriangleApplication {
         let image_index = draw_result.0;
 
         if self.images_in_flight[image_index as usize] != vk::Fence::null() {
+            let image_fences = [*&self.images_in_flight[image_index as usize]];
             unsafe{
                 self.device.as_ref().unwrap()
-                .wait_for_fences(&fences, true, u64::MAX)
+                .wait_for_fences(&image_fences, true, u64::MAX)
                 .expect("fence not work");
             }
         }
