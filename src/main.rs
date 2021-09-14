@@ -83,8 +83,11 @@ struct HelloTriangleApplication {
     images_in_flight : Vec<vk::Fence>,
     current_frame : usize,
     vertices : Vec<Vertex>,
+    indices : Vec<u16>,
     vertex_buffer : Option<vk::Buffer>,
-    vertex_buffer_memory : Option<vk::DeviceMemory>
+    vertex_buffer_memory : Option<vk::DeviceMemory>,
+    index_buffer : Option<vk::Buffer>,
+    index_buffer_memory : Option<vk::DeviceMemory>
 }
 
 impl HelloTriangleApplication {
@@ -125,12 +128,16 @@ impl HelloTriangleApplication {
             images_in_flight : Vec::new(),
             current_frame : 0,
             vertices : vec![
-                Vertex{pos: [0.0, -0.5], color: [1.0, 0.0, 0.0]},
-                Vertex{pos: [0.5, 0.5], color: [0.0, 1.0, 0.0]},
-                Vertex{pos: [-0.5, 0.5], color: [0.0, 0.0, 1.0]},
+                Vertex{pos: [-0.5, -0.5], color: [1.0, 0.0, 0.0]},
+                Vertex{pos: [0.5, -0.5], color: [0.0, 1.0, 0.0]},
+                Vertex{pos: [0.5, 0.5], color: [0.0, 0.0, 1.0]},
+                Vertex{pos: [-0.5, 0.5], color: [1.0, 1.0, 1.0]},
             ],
+            indices : vec![0, 1, 2, 2, 3, 0],
             vertex_buffer : None,
-            vertex_buffer_memory : None
+            vertex_buffer_memory : None,
+            index_buffer : None,
+            index_buffer_memory : None
         }
     }
 
@@ -154,6 +161,7 @@ impl HelloTriangleApplication {
         self.create_framebuffers();
         self.create_command_pool();
         self.create_vertex_buffer();
+        self.create_index_buffer();
         self.create_command_buffers();
         self.create_sync_objects();
     }
@@ -664,39 +672,6 @@ impl HelloTriangleApplication {
         (buffer, buffer_memory)
     }
 
-    fn create_vertex_buffer(&mut self) {
-        let device_ref = self.device.as_ref().unwrap();
-        let buffer_size = (std::mem::size_of::<Vertex>() * self.vertices.len()) as vk::DeviceSize;
-
-        let staging_buffer = self.create_buffer(
-            buffer_size, 
-            vk::BufferUsageFlags::TRANSFER_SRC, 
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, 
-        );
-
-        unsafe{
-            let data = device_ref.map_memory(
-                staging_buffer.1,
-                0,
-                buffer_size,
-                vk::MemoryMapFlags::empty()
-            ).expect("Failed to map mamory") as *mut Vertex;
-            data.copy_from_nonoverlapping(self.vertices.as_ptr(), self.vertices.len());
-            device_ref.unmap_memory(staging_buffer.1);
-        }
-
-        let buffer = self.create_buffer(
-            buffer_size, 
-            vk::BufferUsageFlags::TRANSFER_DST, 
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, 
-        );
-
-        self.copy_buffer(&staging_buffer.0, &buffer.0, buffer_size);
-
-        self.vertex_buffer = Some(buffer.0);
-        self.vertex_buffer_memory = Some(buffer.1);
-    }
-
     fn copy_buffer(&self, src_buffer : &vk::Buffer, dst_buffer : &vk::Buffer, size : vk::DeviceSize){
         let device_ref = self.device.as_ref().unwrap();
         let alloc_info = vk::CommandBufferAllocateInfo {
@@ -744,6 +719,82 @@ impl HelloTriangleApplication {
             device_ref.queue_submit(*self.graphics_queue.as_ref().unwrap(), &submit_info, vk::Fence::null());
             device_ref.queue_wait_idle(*self.graphics_queue.as_ref().unwrap());
             device_ref.free_command_buffers(*self.command_pool.as_ref().unwrap(), command_buffer.as_slice());
+        }
+    }
+
+    fn create_vertex_buffer(&mut self) {
+        let device_ref = self.device.as_ref().unwrap();
+        let buffer_size = (std::mem::size_of::<Vertex>() * self.vertices.len()) as vk::DeviceSize;
+
+        let staging_buffer = self.create_buffer(
+            buffer_size, 
+            vk::BufferUsageFlags::TRANSFER_SRC, 
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, 
+        );
+
+        unsafe{
+            let data = device_ref.map_memory(
+                staging_buffer.1,
+                0,
+                buffer_size,
+                vk::MemoryMapFlags::empty()
+            ).expect("Failed to map mamory") as *mut Vertex;
+            data.copy_from_nonoverlapping(self.vertices.as_ptr(), self.vertices.len());
+            device_ref.unmap_memory(staging_buffer.1);
+        }
+
+        let buffer = self.create_buffer(
+            buffer_size, 
+            vk::BufferUsageFlags::TRANSFER_DST, 
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, 
+        );
+
+        self.copy_buffer(&staging_buffer.0, &buffer.0, buffer_size);
+
+        self.vertex_buffer = Some(buffer.0);
+        self.vertex_buffer_memory = Some(buffer.1);
+
+        unsafe{
+            device_ref.destroy_buffer(*&staging_buffer.0, None);
+            device_ref.free_memory(*&staging_buffer.1, None);
+        }
+    }
+
+    fn create_index_buffer(&mut self) {
+        let device_ref = self.device.as_ref().unwrap();
+        let buffer_size = (std::mem::size_of::<u16>() * self.indices.len()) as vk::DeviceSize;
+
+        let staging_buffer = self.create_buffer(
+            buffer_size, 
+            vk::BufferUsageFlags::TRANSFER_SRC, 
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, 
+        );
+
+        unsafe{
+            let data = device_ref.map_memory(
+                staging_buffer.1,
+                0,
+                buffer_size,
+                vk::MemoryMapFlags::empty()
+            ).expect("Failed to map mamory") as *mut u16;
+            data.copy_from_nonoverlapping(self.indices.as_ptr(), self.indices.len());
+            device_ref.unmap_memory(staging_buffer.1);
+        }
+
+        let buffer = self.create_buffer(
+            buffer_size, 
+            vk::BufferUsageFlags::TRANSFER_DST, 
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, 
+        );
+
+        self.copy_buffer(&staging_buffer.0, &buffer.0, buffer_size);
+
+        self.index_buffer = Some(buffer.0);
+        self.index_buffer_memory = Some(buffer.1);
+
+        unsafe{
+            device_ref.destroy_buffer(*&staging_buffer.0, None);
+            device_ref.free_memory(*&staging_buffer.1, None);
         }
     }
 
@@ -1034,7 +1085,9 @@ impl HelloTriangleApplication {
                 let offsets = [0];
                 device_ref.cmd_bind_vertex_buffers(*command_buffer, 0, &vertex_buffers, &offsets);
 
-                device_ref.cmd_draw(*command_buffer, 3, 1, 0, 0);
+                device_ref.cmd_bind_index_buffer(*command_buffer, *self.index_buffer.as_ref().unwrap(), 0, vk::IndexType::UINT16);
+
+                device_ref.cmd_draw_indexed(*command_buffer, self.indices.len() as u32, 1, 0, 0, 0);
                 device_ref.cmd_end_render_pass(*command_buffer);
                 device_ref.end_command_buffer(*command_buffer).expect("failed to record command buffer");
             }
@@ -1188,6 +1241,11 @@ impl Drop for HelloTriangleApplication {
             self.vertex_buffer = None;
             device_ref.free_memory(*self.vertex_buffer_memory.as_ref().unwrap(), None);
             self.vertex_buffer_memory = None;
+
+            device_ref.destroy_buffer(*self.index_buffer.as_ref().unwrap(), None);
+            self.index_buffer = None;
+            device_ref.free_memory(*self.index_buffer_memory.as_ref().unwrap(), None);
+            self.index_buffer_memory = None;
 
             for semaphore in self.render_finished_semaphores.drain(..){
                 device_ref.destroy_semaphore(semaphore, None);
