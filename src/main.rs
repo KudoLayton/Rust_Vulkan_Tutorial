@@ -2,6 +2,7 @@ extern crate glfw;
 extern crate ash;
 extern crate winapi;
 extern crate memoffset;
+extern crate cgmath;
 
 use std::io::Read;
 use std::mem::swap;
@@ -9,10 +10,16 @@ use std::ops::{Add, Deref};
 use std::{ops::Index, sync::mpsc::Receiver};
 use std::ffi::CString;
 use std::os::raw::c_char;
-use ash::vk::{ClearColorValue, CommandBufferUsageFlags, PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PipelineLayout, PipelineMultisampleStateCreateInfo, PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateFlags, PipelineShaderStageCreateInfo, PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo, VertexInputAttributeDescription, VertexInputBindingDescription};
+use ash::vk::{ClearColorValue, CommandBufferUsageFlags, DescriptorSetLayoutBinding, PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PipelineLayout, PipelineMultisampleStateCreateInfo, PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateFlags, PipelineShaderStageCreateInfo, PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo, VertexInputAttributeDescription, VertexInputBindingDescription};
 use glfw::Glfw;
 use ash::{Instance, vk};
 use winapi::um::libloaderapi::GetModuleHandleW;
+
+struct UniformBufferObject {
+    model : cgmath::Matrix4<f32>,
+    view : cgmath::Matrix4<f32>,
+    proj : cgmath::Matrix4<f32>
+}
 
 struct Vertex {
     pos: [f32; 2],
@@ -72,6 +79,7 @@ struct HelloTriangleApplication {
     swap_chain_extent : Option<vk::Extent2D>,
     swap_chain_image_views : Vec<vk::ImageView>,
     render_pass : Option<vk::RenderPass>,
+    descriptor_set_layout : Option<vk::DescriptorSetLayout>,
     pipeline_layout : Option<vk::PipelineLayout>,
     graphics_pipeline : Option<vk::Pipeline>,
     swap_chain_frame_buffers : Vec<vk::Framebuffer>,
@@ -87,7 +95,10 @@ struct HelloTriangleApplication {
     vertex_buffer : Option<vk::Buffer>,
     vertex_buffer_memory : Option<vk::DeviceMemory>,
     index_buffer : Option<vk::Buffer>,
-    index_buffer_memory : Option<vk::DeviceMemory>
+    index_buffer_memory : Option<vk::DeviceMemory>,
+    uniform_buffers : Vec<vk::Buffer>,
+    uniform_buffers_memory : Vec<vk::DeviceMemory>,
+    start_time : Option<std::time::SystemTime>
 }
 
 impl HelloTriangleApplication {
@@ -117,6 +128,7 @@ impl HelloTriangleApplication {
             swap_chain_extent : None,
             swap_chain_image_views : Vec::new(),
             render_pass : None,
+            descriptor_set_layout : None,
             pipeline_layout : None,
             graphics_pipeline : None,
             swap_chain_frame_buffers : Vec::new(),
@@ -137,7 +149,10 @@ impl HelloTriangleApplication {
             vertex_buffer : None,
             vertex_buffer_memory : None,
             index_buffer : None,
-            index_buffer_memory : None
+            index_buffer_memory : None,
+            uniform_buffers : Vec::new(),
+            uniform_buffers_memory : Vec::new(),
+            start_time : None
         }
     }
 
@@ -157,11 +172,13 @@ impl HelloTriangleApplication {
         self.create_swap_chain();
         self.create_image_views();
         self.create_render_pass();
+        self.create_descriptor_set_layout();
         self.create_graphics_pipeline();
         self.create_framebuffers();
         self.create_command_pool();
         self.create_vertex_buffer();
         self.create_index_buffer();
+        self.create_uniform_buffers();
         self.create_command_buffers();
         self.create_sync_objects();
     }
@@ -197,6 +214,14 @@ impl HelloTriangleApplication {
             );
             swap_chain.destroy_swapchain(*self.swap_chain.as_ref().unwrap(), None);
             self.swap_chain = None;
+
+            for buffer in self.uniform_buffers.drain(..) {
+                device_ref.destroy_buffer(buffer, None);
+            }
+
+            for buffer_memory in self.uniform_buffers_memory.drain(..) {
+                device_ref.free_memory(buffer_memory, None);
+            }
         }
     }
 
@@ -798,6 +823,57 @@ impl HelloTriangleApplication {
         }
     }
 
+    fn create_uniform_buffers(&mut self) {
+        let buffer_size = std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize;
+
+        self.uniform_buffers.resize(
+            self.swap_chain_images.as_ref().unwrap().len(), 
+            vk::Buffer::null()
+        );
+
+        self.uniform_buffers_memory.resize(
+            self.swap_chain_images.as_ref().unwrap().len(),
+            vk::DeviceMemory::null()
+        );
+
+        for i in 1..self.swap_chain_images.as_ref().unwrap().len() {
+            let buffer = unsafe{
+                self.create_buffer(
+                    buffer_size, 
+                    vk::BufferUsageFlags::UNIFORM_BUFFER, 
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
+                )
+            };
+            self.uniform_buffers[i] = buffer.0;
+            self.uniform_buffers_memory[i] = buffer.1;
+        }
+    }
+
+    fn create_descriptor_set_layout(&mut self){
+        let ubo_layout_binding = vk::DescriptorSetLayoutBinding {
+            binding : 0,
+            descriptor_type : vk::DescriptorType::UNIFORM_BUFFER,
+            descriptor_count : 1,
+            stage_flags : vk::ShaderStageFlags::VERTEX,
+            p_immutable_samplers : std::ptr::null()
+        };
+
+        let layout_info = vk::DescriptorSetLayoutCreateInfo {
+            s_type : vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            p_next : std::ptr::null(),
+            binding_count : 1,
+            p_bindings : &ubo_layout_binding as *const DescriptorSetLayoutBinding,
+            flags : vk::DescriptorSetLayoutCreateFlags::empty()
+        };
+
+        self.descriptor_set_layout = Some(unsafe {
+            self.device.as_ref().unwrap()
+            .create_descriptor_set_layout(&layout_info, None)
+            .expect("failed to create descriptor set layout!")
+        });
+    }
+
+
     fn create_graphics_pipeline(&mut self){
         let vert_shader_code = read_file(std::path::Path::new("shaders/vert.spv"));
         let frag_shader_code = read_file(std::path::Path::new("shaders/frag.spv"));
@@ -941,8 +1017,8 @@ impl HelloTriangleApplication {
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
             s_type : vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
             p_next : std::ptr::null(),
-            set_layout_count : 0,
-            p_set_layouts : std::ptr::null(),
+            set_layout_count : 1,
+            p_set_layouts : self.descriptor_set_layout.as_ref().unwrap() as *const vk::DescriptorSetLayout,
             push_constant_range_count : 0,
             p_push_constant_ranges : std::ptr::null(),
             flags : vk::PipelineLayoutCreateFlags::empty()
@@ -1132,6 +1208,17 @@ impl HelloTriangleApplication {
         }
     }
 
+    fn update_uniform_buffer(&mut self, current_image : u32) {
+        if let None = self.start_time {
+            self.start_time = Some(std::time::SystemTime::now());
+        }
+
+        let current_time = std::time::SystemTime::now();
+        let time = 
+            current_time.duration_since(*self.start_time.as_ref().unwrap())
+            .unwrap().as_secs_f32();
+    }
+
     fn draw_frame(&mut self){
         let fences = [*&self.in_flight_fences[self.current_frame]];
         unsafe{
@@ -1171,6 +1258,8 @@ impl HelloTriangleApplication {
         self.images_in_flight[image_index as usize] = self.in_flight_fences[self.current_frame];
 
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+
+        self.update_uniform_buffer(image_index);
 
         let submit_info = [vk::SubmitInfo {
             s_type : vk::StructureType::SUBMIT_INFO,
@@ -1236,6 +1325,9 @@ impl Drop for HelloTriangleApplication {
 
         unsafe{
             let device_ref = self.device.as_ref().unwrap();
+
+            device_ref.destroy_descriptor_set_layout(*self.descriptor_set_layout.as_ref().unwrap(), None);
+            self.descriptor_set_layout = None;
 
             device_ref.destroy_buffer(*self.vertex_buffer.as_ref().unwrap(), None);
             self.vertex_buffer = None;
