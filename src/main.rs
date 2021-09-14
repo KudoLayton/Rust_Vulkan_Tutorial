@@ -3,7 +3,6 @@ extern crate ash;
 extern crate winapi;
 extern crate memoffset;
 
-use std::intrinsics::size_of;
 use std::io::Read;
 use std::mem::swap;
 use std::ops::{Add, Deref};
@@ -82,7 +81,10 @@ struct HelloTriangleApplication {
     render_finished_semaphores : Vec<vk::Semaphore>,
     in_flight_fences : Vec<vk::Fence>,
     images_in_flight : Vec<vk::Fence>,
-    current_frame : usize
+    current_frame : usize,
+    vertices : Vec<Vertex>,
+    vertex_buffer : Option<vk::Buffer>,
+    vertex_buffer_memory : Option<vk::DeviceMemory>
 }
 
 impl HelloTriangleApplication {
@@ -121,7 +123,14 @@ impl HelloTriangleApplication {
             render_finished_semaphores : Vec::new(),
             in_flight_fences : Vec::new(),
             images_in_flight : Vec::new(),
-            current_frame : 0
+            current_frame : 0,
+            vertices : vec![
+                Vertex{pos: [0.0, -0.5], color: [1.0, 0.0, 0.0]},
+                Vertex{pos: [0.5, 0.5], color: [0.0, 1.0, 0.0]},
+                Vertex{pos: [-0.5, 0.5], color: [0.0, 0.0, 1.0]},
+            ],
+            vertex_buffer : None,
+            vertex_buffer_memory : None
         }
     }
 
@@ -144,6 +153,7 @@ impl HelloTriangleApplication {
         self.create_graphics_pipeline();
         self.create_framebuffers();
         self.create_command_pool();
+        self.create_vertex_buffer();
         self.create_command_buffers();
         self.create_sync_objects();
     }
@@ -589,6 +599,75 @@ impl HelloTriangleApplication {
         return unsafe{self.device.as_ref().unwrap().create_shader_module(&create_info, None).expect("failed to create shader module!")};
     }
 
+    fn find_memory_type(&self, type_filter : u32, properties : vk::MemoryPropertyFlags) -> Result<u32, &str> {
+        let mem_properties = unsafe {
+            self.instance.as_ref().unwrap()
+            .get_physical_device_memory_properties(
+                *self.physical_device.as_ref().unwrap()
+            )
+        };
+
+        for i in 0..mem_properties.memory_type_count {
+            if ((type_filter & (1 << i)) > 0)
+            && (mem_properties.memory_types[i as usize].property_flags.contains(properties)) {
+                return Ok(i);
+            }
+        }
+
+        return Err("failed to find suitable memory type!");
+    }
+
+    fn create_vertex_buffer(&mut self) {
+        let buffer_info = vk::BufferCreateInfo {
+            s_type : vk::StructureType::BUFFER_CREATE_INFO,
+            p_next : std::ptr::null(),
+            size : (std::mem::size_of::<Vertex>() * self.vertices.len()) as u64,
+            usage : vk::BufferUsageFlags::VERTEX_BUFFER,
+            sharing_mode : vk::SharingMode::EXCLUSIVE,
+            flags : vk::BufferCreateFlags::empty(),
+            queue_family_index_count : 0,
+            p_queue_family_indices : std::ptr::null()
+        };
+
+        let device_ref = self.device.as_ref().unwrap();
+
+        self.vertex_buffer = Some(unsafe{
+            device_ref.create_buffer(&buffer_info, None)
+            .expect("failed to create vertex buffer!")
+        });
+
+        let mem_requirements = unsafe{
+            device_ref.get_buffer_memory_requirements(*self.vertex_buffer.as_ref().unwrap())
+        };
+
+        let alloc_info = vk::MemoryAllocateInfo {
+            s_type : vk::StructureType::MEMORY_ALLOCATE_INFO,
+            p_next : std::ptr::null(),
+            allocation_size : mem_requirements.size,
+            memory_type_index : self.find_memory_type(mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT).unwrap()
+        };
+
+        self.vertex_buffer_memory = Some(unsafe {
+            device_ref.allocate_memory(&alloc_info, None)
+            .expect("failed to allocate vertex buffer memory")
+        });
+
+        unsafe{
+            device_ref.bind_buffer_memory(*self.vertex_buffer.as_ref().unwrap(), 
+            *self.vertex_buffer_memory.as_ref().unwrap(), 0);
+
+            let data = device_ref.map_memory(
+                *self.vertex_buffer_memory.as_ref().unwrap(),
+                0,
+                buffer_info.size,
+                vk::MemoryMapFlags::empty()
+            ).expect("Failed to map mamory") as *mut Vertex;
+            data.copy_from_nonoverlapping(self.vertices.as_ptr(), self.vertices.len());
+            device_ref.unmap_memory(*self.vertex_buffer_memory.as_ref().unwrap());
+        }
+    }
+
     fn create_graphics_pipeline(&mut self){
         let vert_shader_code = read_file(std::path::Path::new("shaders/vert.spv"));
         let frag_shader_code = read_file(std::path::Path::new("shaders/frag.spv"));
@@ -820,8 +899,6 @@ impl HelloTriangleApplication {
     }
 
     fn create_command_buffers(&mut self){
-        //self.command_buffers.resize(self.swap_chain_frame_buffers.len(), vk::CommandBuffer::null());
-
         let alloc_info = vk::CommandBufferAllocateInfo {
             s_type : vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
             p_next : std::ptr::null(),
@@ -873,6 +950,11 @@ impl HelloTriangleApplication {
             unsafe{
                 device_ref.cmd_begin_render_pass(*command_buffer, &render_pass_info, vk::SubpassContents::INLINE);
                 device_ref.cmd_bind_pipeline(*command_buffer, vk::PipelineBindPoint::GRAPHICS, *self.graphics_pipeline.as_ref().unwrap());
+
+                let vertex_buffers = [*self.vertex_buffer.as_ref().unwrap()];
+                let offsets = [0];
+                device_ref.cmd_bind_vertex_buffers(*command_buffer, 0, &vertex_buffers, &offsets);
+
                 device_ref.cmd_draw(*command_buffer, 3, 1, 0, 0);
                 device_ref.cmd_end_render_pass(*command_buffer);
                 device_ref.end_command_buffer(*command_buffer).expect("failed to record command buffer");
@@ -1023,6 +1105,11 @@ impl Drop for HelloTriangleApplication {
         unsafe{
             let device_ref = self.device.as_ref().unwrap();
 
+            device_ref.destroy_buffer(*self.vertex_buffer.as_ref().unwrap(), None);
+            self.vertex_buffer = None;
+            device_ref.free_memory(*self.vertex_buffer_memory.as_ref().unwrap(), None);
+            self.vertex_buffer_memory = None;
+
             for semaphore in self.render_finished_semaphores.drain(..){
                 device_ref.destroy_semaphore(semaphore, None);
             }
@@ -1057,6 +1144,7 @@ fn read_file(file_name : &std::path::Path) -> Vec<u8>{
     return buffer;
 
 }
+
 
 fn main() {
     let mut app = HelloTriangleApplication::new();
