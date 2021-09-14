@@ -981,6 +981,34 @@ impl HelloTriangleApplication {
 impl Drop for HelloTriangleApplication {
     fn drop(&mut self) {
         self.clean_swap_chain();
+
+        unsafe{
+            let device_ref = self.device.as_ref().unwrap();
+
+            for semaphore in self.render_finished_semaphores.drain(..){
+                device_ref.destroy_semaphore(semaphore, None);
+            }
+
+            for semaphore in self.image_available_semaphores.drain(..){
+                device_ref.destroy_semaphore(semaphore, None);
+            }
+
+            for fence in self.in_flight_fences.drain(..) {
+                device_ref.destroy_fence(fence, None);
+            }
+
+            device_ref.destroy_command_pool(*self.command_pool.as_ref().unwrap(), None);
+            self.command_pool = None;
+
+            device_ref.destroy_device(None);
+
+            let surface = ash::extensions::khr::Surface::new(&self.vk_entry, self.instance.as_ref().unwrap());
+            surface.destroy_surface(*self.surface.as_ref().unwrap(), None);
+            self.surface = None;
+
+            self.instance.as_ref().unwrap().destroy_instance(None);
+            self.instance = None;
+        }
     }
 }
 
