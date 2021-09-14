@@ -1,17 +1,52 @@
 extern crate glfw;
 extern crate ash;
 extern crate winapi;
+extern crate memoffset;
 
+use std::intrinsics::size_of;
 use std::io::Read;
 use std::mem::swap;
 use std::ops::{Add, Deref};
 use std::{ops::Index, sync::mpsc::Receiver};
 use std::ffi::CString;
 use std::os::raw::c_char;
-use ash::vk::{ClearColorValue, CommandBufferUsageFlags, PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PipelineLayout, PipelineMultisampleStateCreateInfo, PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateFlags, PipelineShaderStageCreateInfo, PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo};
+use ash::vk::{ClearColorValue, CommandBufferUsageFlags, PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PipelineLayout, PipelineMultisampleStateCreateInfo, PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateFlags, PipelineShaderStageCreateInfo, PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo, VertexInputAttributeDescription, VertexInputBindingDescription};
 use glfw::Glfw;
 use ash::{Instance, vk};
 use winapi::um::libloaderapi::GetModuleHandleW;
+
+struct Vertex {
+    pos: [f32; 2],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    fn get_binding_destcription() -> vk::VertexInputBindingDescription {
+        return vk::VertexInputBindingDescription {
+            binding : 0,
+            stride : std::mem::size_of::<Self>() as u32,
+            input_rate : vk::VertexInputRate::VERTEX
+        };
+    }
+
+    fn get_attribute_descripyions() -> [vk::VertexInputAttributeDescription; 2] {
+        return [
+            vk::VertexInputAttributeDescription {
+                binding : 0,
+                location : 0,
+                format : vk::Format::R32G32_SFLOAT,
+                offset : memoffset::offset_of!(Self, pos) as u32,
+            },
+            
+            vk::VertexInputAttributeDescription {
+                binding : 0,
+                location : 1,
+                format : vk::Format::R32G32B32_SFLOAT,
+                offset : memoffset::offset_of!(Self, color) as u32
+            }
+        ]
+    }
+}
 
 struct SwapChainSupportDetails{
     capabilities : vk::SurfaceCapabilitiesKHR,
@@ -584,13 +619,16 @@ impl HelloTriangleApplication {
 
         let shader_stages = [vert_shader_stage_info, frag_shader_stage_info];
 
+        let binding_description = Vertex::get_binding_destcription();
+        let attribute_description = Vertex::get_attribute_descripyions();
+
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo {
             s_type : vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             p_next : std::ptr::null(),
-            vertex_binding_description_count : 0,
-            p_vertex_binding_descriptions : std::ptr::null(),
-            vertex_attribute_description_count : 0,
-            p_vertex_attribute_descriptions : std::ptr::null(),
+            vertex_binding_description_count : 1,
+            p_vertex_binding_descriptions : &binding_description as *const VertexInputBindingDescription,
+            vertex_attribute_description_count : attribute_description.as_ref().len() as u32,
+            p_vertex_attribute_descriptions : &attribute_description as *const vk::VertexInputAttributeDescription,
             flags : vk::PipelineVertexInputStateCreateFlags::empty()
         };
 
