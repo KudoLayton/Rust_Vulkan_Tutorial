@@ -113,6 +113,40 @@ impl HelloTriangleApplication {
         self.create_sync_objects();
     }
 
+    fn clean_swap_chain(&mut self) {
+        unsafe{
+            let device_ref = self.device.as_ref().unwrap();
+            for swap_chain_frame_buffer in self.swap_chain_frame_buffers.drain(..) {
+                device_ref.destroy_framebuffer(swap_chain_frame_buffer, None);
+            }
+
+            device_ref.free_command_buffers(
+                *self.command_pool.as_ref().unwrap(), 
+                self.command_buffers.as_ref().unwrap().as_slice());
+            self.command_buffers = None;
+
+            device_ref.destroy_pipeline(self.graphics_pipeline.unwrap(), None);
+            self.graphics_pipeline = None;
+
+            device_ref.destroy_pipeline_layout(*self.pipeline_layout.as_ref().unwrap(), None);
+            self.graphics_pipeline = None;
+
+            device_ref.destroy_render_pass(*self.render_pass.as_ref().unwrap(), None);
+            self.render_pass = None;
+
+            for image_view in self.swap_chain_image_views.drain(..){
+                device_ref.destroy_image_view(image_view, None);
+            }
+
+            let swap_chain = ash::extensions::khr::Swapchain::new(
+                self.instance.as_ref().unwrap(),
+                device_ref
+            );
+            swap_chain.destroy_swapchain(*self.swap_chain.as_ref().unwrap(), None);
+            self.swap_chain = None;
+        }
+    }
+
     fn create_instance(&mut self){
         let name = CString::new("Hello Triangle").unwrap();
         let engine_name = CString::new("No Engine").unwrap();
@@ -941,6 +975,12 @@ impl HelloTriangleApplication {
             .device_wait_idle()
             .expect("");
         }
+    }
+}
+
+impl Drop for HelloTriangleApplication {
+    fn drop(&mut self) {
+        self.clean_swap_chain();
     }
 }
 
