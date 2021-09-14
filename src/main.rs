@@ -617,12 +617,17 @@ impl HelloTriangleApplication {
         return Err("failed to find suitable memory type!");
     }
 
-    fn create_vertex_buffer(&mut self) {
+    fn create_buffer(
+        &self, 
+        size : vk::DeviceSize,
+        usage : vk::BufferUsageFlags,
+        properties : vk::MemoryPropertyFlags,
+    ) -> (vk::Buffer, vk::DeviceMemory){
         let buffer_info = vk::BufferCreateInfo {
             s_type : vk::StructureType::BUFFER_CREATE_INFO,
             p_next : std::ptr::null(),
-            size : (std::mem::size_of::<Vertex>() * self.vertices.len()) as u64,
-            usage : vk::BufferUsageFlags::VERTEX_BUFFER,
+            size : size,
+            usage : usage,
             sharing_mode : vk::SharingMode::EXCLUSIVE,
             flags : vk::BufferCreateFlags::empty(),
             queue_family_index_count : 0,
@@ -631,40 +636,114 @@ impl HelloTriangleApplication {
 
         let device_ref = self.device.as_ref().unwrap();
 
-        self.vertex_buffer = Some(unsafe{
+        let buffer = unsafe{
             device_ref.create_buffer(&buffer_info, None)
             .expect("failed to create vertex buffer!")
-        });
+        };
 
         let mem_requirements = unsafe{
-            device_ref.get_buffer_memory_requirements(*self.vertex_buffer.as_ref().unwrap())
+            device_ref.get_buffer_memory_requirements(buffer)
         };
 
         let alloc_info = vk::MemoryAllocateInfo {
             s_type : vk::StructureType::MEMORY_ALLOCATE_INFO,
             p_next : std::ptr::null(),
             allocation_size : mem_requirements.size,
-            memory_type_index : self.find_memory_type(mem_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT).unwrap()
+            memory_type_index : self.find_memory_type(mem_requirements.memory_type_bits, properties).unwrap()
         };
 
-        self.vertex_buffer_memory = Some(unsafe {
+        let buffer_memory = unsafe {
             device_ref.allocate_memory(&alloc_info, None)
             .expect("failed to allocate vertex buffer memory")
-        });
+        };
 
         unsafe{
-            device_ref.bind_buffer_memory(*self.vertex_buffer.as_ref().unwrap(), 
-            *self.vertex_buffer_memory.as_ref().unwrap(), 0);
+            device_ref.bind_buffer_memory(buffer, buffer_memory, 0);
+        }
 
+        (buffer, buffer_memory)
+    }
+
+    fn create_vertex_buffer(&mut self) {
+        let device_ref = self.device.as_ref().unwrap();
+        let buffer_size = (std::mem::size_of::<Vertex>() * self.vertices.len()) as vk::DeviceSize;
+
+        let staging_buffer = self.create_buffer(
+            buffer_size, 
+            vk::BufferUsageFlags::TRANSFER_SRC, 
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, 
+        );
+
+        unsafe{
             let data = device_ref.map_memory(
-                *self.vertex_buffer_memory.as_ref().unwrap(),
+                staging_buffer.1,
                 0,
-                buffer_info.size,
+                buffer_size,
                 vk::MemoryMapFlags::empty()
             ).expect("Failed to map mamory") as *mut Vertex;
             data.copy_from_nonoverlapping(self.vertices.as_ptr(), self.vertices.len());
-            device_ref.unmap_memory(*self.vertex_buffer_memory.as_ref().unwrap());
+            device_ref.unmap_memory(staging_buffer.1);
+        }
+
+        let buffer = self.create_buffer(
+            buffer_size, 
+            vk::BufferUsageFlags::TRANSFER_DST, 
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, 
+        );
+
+        self.copy_buffer(&staging_buffer.0, &buffer.0, buffer_size);
+
+        self.vertex_buffer = Some(buffer.0);
+        self.vertex_buffer_memory = Some(buffer.1);
+    }
+
+    fn copy_buffer(&self, src_buffer : &vk::Buffer, dst_buffer : &vk::Buffer, size : vk::DeviceSize){
+        let device_ref = self.device.as_ref().unwrap();
+        let alloc_info = vk::CommandBufferAllocateInfo {
+            s_type : vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next : std::ptr::null(),
+            level : vk::CommandBufferLevel::PRIMARY,
+            command_pool : *self.command_pool.as_ref().unwrap(),
+            command_buffer_count : 1
+        };
+
+        let command_buffer = unsafe{
+            device_ref.allocate_command_buffers(&alloc_info)
+            .unwrap()
+        };
+
+        let begin_info = vk::CommandBufferBeginInfo {
+            s_type : vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            p_next : std::ptr::null(),
+            flags : vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            p_inheritance_info : std::ptr::null()
+        };
+
+        let copy_region = [vk::BufferCopy {
+            src_offset : 0,
+            dst_offset : 0,
+            size : size
+        }];
+
+        let submit_info = [vk::SubmitInfo {
+            s_type : vk::StructureType::SUBMIT_INFO,
+            p_next : std::ptr::null(),
+            command_buffer_count : 1,
+            p_command_buffers : command_buffer.as_ptr(),
+            wait_semaphore_count : 0,
+            p_wait_semaphores : std::ptr::null(),
+            signal_semaphore_count : 0,
+            p_signal_semaphores : std::ptr::null(),
+            p_wait_dst_stage_mask : std::ptr::null()
+        }];
+
+        unsafe{
+            device_ref.begin_command_buffer(command_buffer[0], &begin_info);
+            device_ref.cmd_copy_buffer(command_buffer[0], *src_buffer, *dst_buffer, &copy_region);
+            device_ref.end_command_buffer(command_buffer[0]);
+            device_ref.queue_submit(*self.graphics_queue.as_ref().unwrap(), &submit_info, vk::Fence::null());
+            device_ref.queue_wait_idle(*self.graphics_queue.as_ref().unwrap());
+            device_ref.free_command_buffers(*self.command_pool.as_ref().unwrap(), command_buffer.as_slice());
         }
     }
 
